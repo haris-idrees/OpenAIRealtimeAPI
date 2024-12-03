@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audio WebSocket</title>
+</head>
+<body>
+    <h1>Audio Streaming with WebSocket</h1>
+    <button id="startButton">Start Streaming</button>
+    <pre id="output"></pre>
+    <script>
+        const socket = new WebSocket('ws://' + window.location.host + '/ws/audio/');
+        document.getElementById('output').textContent = 'WebSocket connection status: ' + socket.readyState;
+        socket.onopen = function(e) {
+            console.log("WebSocket connected");
+            document.getElementById('output').textContent = 'Socket Connected';
+        };
+
+        socket.onmessage = function(e) {
+            if (e.data instanceof Blob) {
+                // Play the received audio blob
+                const audioURL = URL.createObjectURL(e.data);
+                const audio = new Audio(audioURL);
+                audio.play();
+            } else {
+                console.log("Received message:", e.data);
+            }
+        };
+
+        socket.onerror = function(e) {
+            console.error("WebSocket error:", e);
+        };
+
+        socket.onclose = function(e) {
+            console.log("WebSocket connection closed:", e);
+        };
+
+        document.getElementById('startButton').addEventListener('click', function() {
+            console.log("Start button clicked");
+            startAudioStreaming();
+        });
+
+        async function startAudioStreaming() {
+            if (!window.MediaRecorder) {
+                console.error("MediaRecorder is not supported in this browser.");
+                return;
+            }
+
+            try {
+                console.log("Requesting microphone access...");
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log("Microphone access granted");
+
+                const mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = function(event) {
+                    if (event.data.size > 0) {
+                        // Send the Blob as binary data
+                        socket.send(event.data);
+                        console.log("Sent audio chunk to WebSocket.");
+                    } else {
+                        console.warn("Empty audio chunk, skipping...");
+                    }
+                };
+
+                mediaRecorder.start(1000);  // Send data every second
+                console.log("Audio recording started...");
+            } catch (error) {
+                console.error("Error starting audio streaming:", error);
+            }
+        }
+    </script>
+</body>
+</html>
