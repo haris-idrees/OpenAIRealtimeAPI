@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audio WebSocket</title>
+</head>
+<body>
+    <h1>Audio Streaming with WebSocket</h1>
+    <button id="startButton">Start Streaming</button>
+    <pre id="output"></pre>
+    <script>
+        const socket = new WebSocket('ws://' + window.location.host + '/ws/audio/');
+        document.getElementById('output').textContent = 'WebSocket connection status: ' + socket.readyState;
+        socket.onopen = function(e) {
+            console.log("WebSocket connected");
+            document.getElementById('output').textContent = 'Socket Connected';
+        };
+
+        socket.onmessage = function(e) {
+            if (typeof e.data === 'string') {
+                const data = JSON.parse(e.data);
+                if (data.type === 'response') {
+                    console.log("Received response from OpenAI:", data.data);
+                    // Handle JSON response as needed
+                }
+            } else if (e.data instanceof Blob) {
+                // Play the received audio blob
+                const audioURL = URL.createObjectURL(e.data);
+                const audio = new Audio(audioURL);
+                audio.play();
+            } else {
+                console.log("Received unknown message type:", e.data);
+            }
+        };
+
+        socket.onerror = function(e) {
+            console.error("WebSocket error:", e);
+        };
+
+        socket.onclose = function(e) {
+            console.log("WebSocket connection closed:", e);
+        };
+
+        document.getElementById('startButton').addEventListener('click', function() {
+            console.log("Start button clicked");
+            startAudioStreaming();
+        });
+
+        async function startAudioStreaming() {
+            try {
+                console.log("Requesting microphone access...");
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log("Microphone access granted");
+
+                const context = new AudioContext();
+                const source = context.createMediaStreamSource(stream);
+                const processor = context.createScriptProcessor(4096, 1, 1);
+
+                source.connect(processor);
+                processor.connect(context.destination);
+
+                let audioBuffer = [];
+                processor.onaudioprocess = function(e) {
+                    const audioData = e.inputBuffer.getChannelData(0);
+                    audioBuffer.push(new Float32Array(audioData));
+                    if (audioBuffer.length >= 60) { // Collect 60 frames of audio
+                        const mergedBuffer = new Float32Array(audioBuffer.length * audioBuffer[0].length);
+                        let offset = 0;
+                        for (const buffer of audioBuffer) {
+                            mergedBuffer.set(buffer, offset);
+                            offset += buffer.length;
+                        }
+                        const pcmData = floatTo16BitPCM(mergedBuffer);
+                        const wavBlob = float32ToWav(pcmData.buffer);
+                        socket.send(wavBlob);
+                        audioBuffer = [];
+                    }
+                };
+            } catch (error) {
+                console.error("Error starting audio streaming:", error);
+            }
+        }
+
+        function floatTo16BitPCM(floatArray) {
+            const buffer = new Int16Array(floatArray.length);
+            for (let i = 0; i < floatArray.length; i++) {
+                buffer[i] = floatArray[i] * 0x7FFF; // Scale to 16-bit PCM
+            }
+            return buffer;
+        }
+
+        function float32ToWav(audioBuffer) {
+            const buffer = new ArrayBuffer(44 + audioBuffer.byteLength);
+            const view = new DataView(buffer);
+
+            // RIFF header
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + audioBuffer.byteLength, true);
+            writeString(view, 8, 'WAVE');
+            // FMT chunk
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true); // Length of fmt chunk
+            view.setUint16(20, 1, true); // Format = 1
+            view.setUint16(22, 1, true); // Channels
+            view.setUint32(24, 16000, true); // SampleRate
+            view.setUint32(28, 16000 * 2, true); // ByteRate
+            view.setUint16(32, 2, true); // BlockAlign
+            view.setUint16(34, 16, true); // BitsPerSample
+            // DATA chunk
+            writeString(view, 36, 'data');
+            view.setUint32(40, audioBuffer.byteLength, true);
+            const wav = new Uint8Array(buffer);
+            wav.set(new Uint8Array(audioBuffer), 44);
+            return new Blob([wav], { type: 'audio/wav' });
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+    </script>
+</body>
+</html>
